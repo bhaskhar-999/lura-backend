@@ -1,5 +1,5 @@
 // =======================================================================
-// 👑 LURA STUDIO: THE ULTIMATE REAL-TIME ENTERPRISE BACKEND
+// 👑 LURA STUDIO: ENTERPRISE MICROSERVICE (V6)
 // =======================================================================
 require('dotenv').config();
 const express = require('express');
@@ -8,110 +8,105 @@ const axios = require('axios');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
+const morgan = require('morgan'); 
+const os = require('os');
+const { performance } = require('perf_hooks');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const API_KEY = process.env.NVIDIA_API_KEY || process.env.API_KEY; // Fallback in case variable names change
+const API_KEY = process.env.NVIDIA_API_KEY || process.env.API_KEY;
 const API_URL = process.env.API_URL || "https://integrate.api.nvidia.com/v1/chat/completions";
 
-// 🛡️ ====================================================================
-// 1. ENTERPRISE SECURITY & MIDDLEWARE
-// =======================================================================
-app.use(helmet()); // Secures HTTP headers against malicious attacks
-app.use(compression()); // Zips the payload for hyper-fast response times
-app.use(cors({ origin: '*' })); 
+// 🛡️ SECURITY & TRAFFIC RADAR
+app.use(helmet());
+app.use(compression());
+app.use(morgan('dev')); // Live terminal traffic logging
 
-// 🚀 100MB PAYLOAD UPGRADE (Fixes high-res photo crashing)
+// 🔒 STRICT CORS (Only Vercel & Local Developer Access)
+const allowedOrigins = ['https://lura-psi.vercel.app', 'http://localhost:5500', 'http://127.0.0.1:5500'];
+app.use(cors({
+    origin: function (origin, callback) {
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Security Protocol: Access Denied by CORS.'));
+        }
+    }
+}));
+
 app.use(express.json({ limit: '100mb' })); 
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
-// 🛑 THE FIREWALL (API Token Saver)
-// Blocks spam attacks. Max 50 requests per 15 minutes per IP.
+// 🛑 SMART RATE LIMITER
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
-    max: 50, 
-    message: { error: "Security Protocol: Too many requests. Please wait." }
+    max: 100, // Boosted to 100 for power user access
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Security Protocol: Network flooded. Try again shortly." }
 });
-app.use('/api/', apiLimiter); // Applies firewall to all /api/ routes
+app.use('/api/', apiLimiter);
 
-
-// 🟢 ====================================================================
-// 2. ECOSYSTEM HEALTH & ANTI-SLEEP PING
-// =======================================================================
-// Use this for cron-jobs to prevent server sleep, or for local phone pinging
+// 📊 HEALTH CHECK PING
 app.get(['/api/ping', '/api/health'], (req, res) => {
+    const memory = process.memoryUsage();
     res.status(200).json({ 
-        status: "LURA SYSTEM ACTIVE", 
+        status: "LURA CORE ACTIVE", 
+        uptime: `${(process.uptime() / 60).toFixed(2)} minutes`,
+        hardware: { ram_usage: `${(memory.rss / 1024 / 1024).toFixed(2)} MB` },
         timestamp: new Date().toISOString() 
     });
 });
 
-
-// 🧠 ====================================================================
-// 3. MAIN AI NEURAL CORE (CHAT & VISION)
-// =======================================================================
+// 🧠 MAIN AI ROUTE (WITH AUTO-HEALING)
 app.post('/api/chat', async (req, res) => {
-    try {
-        const { model, systemPrompt, messages, role } = req.body;
-        console.log(`[${new Date().toLocaleTimeString()}] INCOMING PAYLOAD - Model: ${model || "Default"}`);
+    const start_time = performance.now();
+    const { model, systemPrompt, messages } = req.body;
+    let targetModel = model || "meta/llama-3.1-8b-instruct";
 
-        if (!API_KEY) {
-            console.error("❌ [ERROR] Missing API Key in Render Environment.");
-            return res.status(500).json({ error: "Server misconfiguration: Missing API Key." });
-        }
+    console.log(`\n[${new Date().toLocaleTimeString()}] 🚀 NEW REQUEST IDENTIFIED: ${targetModel}`);
 
-        // 🕒 THE TIME MACHINE: Real-Time Chronological Injection
-        const temporalContext = `\n[REAL-TIME SYSTEM INFO: The current local date and time is ${new Date().toString()}. The current year is 2026. You have native access to real-time chronological data. Respond accurately to time-sensitive queries using this reference.]`;
+    if (!API_KEY) return res.status(500).json({ error: "System Fault: Missing API Key." });
 
-        const formattedMessages = [
-            { role: "system", content: (systemPrompt || "You are a helpful AI assistant.") + temporalContext },
-            ...messages
-        ];
+    const temporalContext = `\n[SYSTEM CORE: The current year is 2026. Today is ${new Date().toDateString()}. Maintain absolute 2026 accuracy.]`;
+    const formattedMessages = [
+        { role: "system", content: (systemPrompt || "You are Lura, an elite AI.") + temporalContext },
+        ...messages
+    ];
 
-        // ⚡ FIRE THE REQUEST TO NVIDIA VIA AXIOS
-        const response = await axios.post(
-            API_URL,
-            {
-                model: model || "meta/llama-3.1-8b-instruct", 
-                messages: formattedMessages,
-                temperature: 0.7,
-                max_tokens: 4000,
-            },
-            {
-                headers: {
-                    "Authorization": `Bearer ${API_KEY}`,
-                    "Content-Type": "application/json",
-                },
-                timeout: 90000 // ⏱️ 90-Second Kill Switch
+    const payload = { model: targetModel, messages: formattedMessages, temperature: 0.7, max_tokens: 4000 };
+    const config = { headers: { "Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json" }, timeout: 90000 };
+
+    // ♻️ AUTO-RETRY LOGIC 
+    let attempts = 0;
+    let maxAttempts = 2;
+
+    while (attempts < maxAttempts) {
+        try {
+            attempts++;
+            let response = await axios.post(API_URL, payload, config);
+            const aiReply = response.data.choices[0].message.content;
+            const end_time = performance.now();
+            console.log(`✅ [SUCCESS] AI generated response in ${(end_time - start_time).toFixed(2)}ms`);
+            return res.status(200).json({ reply: aiReply });
+        } catch (error) {
+            console.error(`❌ [API ERROR - Attempt ${attempts}]:`, error.message);
+            if (attempts >= maxAttempts) {
+                if (error.response?.status === 413) return res.status(413).json({ error: "Payload too massive. Compress assets." });
+                return res.status(error.response?.status || 500).json({ error: `Provider Fault: ${error.message}` });
             }
-        );
-
-        const aiReply = response.data.choices[0].message.content;
-        console.log(`[${new Date().toLocaleTimeString()}] SUCCESS - Response sent to client.`);
-        res.status(200).json({ reply: aiReply });
-
-    } catch (error) {
-        console.error("❌ [API FATAL ERROR]:", error.message);
-        
-        // 🛡️ INDUSTRIAL ERROR CATCHING
-        if (error.response) {
-            // Check specifically for massive image payloads that break the 100mb barrier
-            if (error.response.status === 413) {
-                return res.status(413).json({ error: "Image file is too massive for the neural net. Please compress the photo." });
-            }
-            res.status(error.response.status).json({ 
-                error: `Provider Error: ${error.response.data?.error?.message || "Unknown API failure"}` 
-            });
-        } else if (error.request) {
-            // Caught by the 90-second Axios timeout
-            res.status(504).json({ error: "AI Provider timed out. Please try again." });
-        } else {
-            // General server crash
-            res.status(500).json({ error: "Internal Server Engine Failure: " + error.message });
+            console.log(`🔄 Retrying Request...`);
         }
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`👑 LURA STUDIO FUSION BACKEND ONLINE ON PORT ${PORT}`);
+// 🛑 GRACEFUL SHUTDOWN SEQUENCE
+const server = app.listen(PORT, () => console.log(`👑 LURA STUDIO CLUSTER ACTIVE ON PORT ${PORT}`));
+
+process.on('SIGTERM', () => {
+    console.log('🛑 SIGTERM received. Shutting down gracefully...');
+    server.close(() => {
+        console.log('💤 Process terminated safely.');
+        process.exit(0);
+    });
 });
